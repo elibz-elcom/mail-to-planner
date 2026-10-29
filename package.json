@@ -1,0 +1,13 @@
+{
+  "name": "mail-to-planner",
+  "version": "1.0.0",
+  "description": "Elcom IT – Outlook add-in: email to Planner task",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "devDependencies": {
+    "@azure/msal-browser": "5.27.0",
+    "esbuild": "0.28.2"
+  },
+  "private": true
+}

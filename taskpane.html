@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>שלח ל-Planner</title>
+  <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+  <link rel="stylesheet" href="taskpane.css">
+</head>
+<body>
+  <main id="app">
+    <header class="top">
+      <img src="assets/icon-32.png" alt="" width="24" height="24">
+      <h1>שלח ל-Planner</h1>
+    </header>
+
+    <section id="status" class="status" role="status" aria-live="polite">
+      <span class="spinner" aria-hidden="true"></span>
+      <span id="statusText">מתחבר…</span>
+    </section>
+
+    <section id="signin" class="card hidden">
+      <p>צריך להתחבר פעם אחת כדי לגשת לתוכניות ה-Planner שלך.</p>
+      <button id="signinBtn" class="primary" type="button">התחברות</button>
+    </section>
+
+    <form id="taskForm" class="hidden" novalidate>
+      <div id="favRow" class="field hidden">
+        <span class="label">מועדפים</span>
+        <div id="favChips" class="chips"></div>
+      </div>
+
+      <div class="field">
+        <label for="planSelect">תוכנית</label>
+        <div class="row">
+          <select id="planSelect" required></select>
+          <button id="favBtn" class="icon" type="button" title="הוסף/הסר ממועדפים" aria-label="מועדף">☆</button>
+        </div>
+      </div>
+
+      <div class="field">
+        <label for="bucketSelect">Bucket</label>
+        <select id="bucketSelect"></select>
+      </div>
+
+      <div class="field">
+        <label for="titleInput">כותרת המשימה</label>
+        <input id="titleInput" type="text" maxlength="255" required>
+      </div>
+
+      <div class="grid2">
+        <div class="field">
+          <label for="assigneeSelect">שיוך</label>
+          <select id="assigneeSelect"></select>
+        </div>
+        <div class="field">
+          <label for="dueInput">תאריך יעד</label>
+          <input id="dueInput" type="date">
+        </div>
+      </div>
+
+      <div class="field">
+        <label class="check"><input id="includeBody" type="checkbox" checked> לצרף את תוכן המייל לתיאור</label>
+      </div>
+
+      <button id="createBtn" class="primary big" type="submit">צור משימה</button>
+    </form>
+
+    <section id="done" class="card success hidden">
+      <p class="big-text">✔ המשימה נוצרה</p>
+      <p id="doneDetails" class="muted"></p>
+      <a id="openTaskLink" class="primary linkbtn" target="_blank" rel="noopener">פתח ב-Planner</a>
+      <button id="againBtn" type="button" class="secondary">משימה נוספת מאותו מייל</button>
+    </section>
+
+    <section id="error" class="card error hidden">
+      <p id="errorText"></p>
+      <button id="retryBtn" type="button" class="secondary">נסה שוב</button>
+    </section>
+
+    <footer class="foot muted">Elcom IT</footer>
+  </main>
+  <script src="taskpane.js"></script>
+</body>
+</html>
