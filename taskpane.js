@@ -362,7 +362,7 @@ async function searchPeople(q) {
   try {
     const res = await graph(
       `/users?$search=${encodeURIComponent(`"displayName:${safe}" OR "mail:${safe}"`)}` +
-        `&$select=id,displayName,mail,jobTitle&$top=15&$filter=accountEnabled eq true&$count=true`,
+        `&$select=id,displayName,mail,userPrincipalName&$top=15&$count=true`,
       { headers: { ConsistencyLevel: "eventual" } }
     );
     if (seq !== peopleSeq) return;
@@ -377,7 +377,7 @@ async function searchPeople(q) {
       b.textContent = u.displayName;
       const sub = document.createElement("span");
       sub.className = "sub";
-      sub.textContent = [u.jobTitle, u.mail].filter(Boolean).join(" · ");
+      sub.textContent = u.mail || u.userPrincipalName || "";
       b.appendChild(sub);
       b.addEventListener("click", () => pickPerson(u));
       box.appendChild(b);
