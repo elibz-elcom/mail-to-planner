@@ -79,7 +79,8 @@ button.icon.on { background: var(--accent-soft); }
 .card.error { border-color: var(--err); background: var(--err-soft); }
 .big-text { font-size: 18px; font-weight: 600; margin: 0; color: var(--ok); }
 .card p { margin: 0 0 8px; }
-.foot { margin-top: 20px; font-size: 12px; text-align: center; }
+.foot { margin-top: 20px; display: flex; justify-content: center; }
+.foot img { display: block; height: 40px; width: auto; opacity: .9; }
 @media (max-width: 340px) { .grid2 { grid-template-columns: 1fr; } }
 textarea {
   width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px;

@@ -40,7 +40,10 @@ await build({
   logLevel: "warning",
 });
 
-for (const f of ["taskpane.html", "taskpane.css", "commands.html", "redirect.html"])
+for (const f of [
+  "taskpane.html", "taskpane.css", "commands.html", "redirect.html",
+  "elcom-logo.png", "elcom-logo-dark.png",
+])
   cpSync(join(root, f), join(dist, f));
 cpSync(join(root, "assets"), join(dist, "assets"), { recursive: true });
 writeFileSync(join(dist, ".nojekyll"), "");
