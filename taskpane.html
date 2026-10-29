@@ -9,11 +9,6 @@
 </head>
 <body>
   <main id="app">
-    <header class="top">
-      <img src="assets/icon-32.png" alt="" width="24" height="24">
-      <h1>שלח ל-Planner</h1>
-    </header>
-
     <section id="status" class="status" role="status" aria-live="polite">
       <span class="spinner" aria-hidden="true"></span>
       <span id="statusText">מתחבר…</span>
@@ -31,7 +26,8 @@
       </div>
 
       <div class="field">
-        <label for="planSelect">תוכנית</label>
+        <label for="planSelect">תוכנית <span id="planCount" class="muted small"></span></label>
+        <input id="planFilter" type="search" class="filter" placeholder="חיפוש תוכנית…" autocomplete="off">
         <div class="row">
           <select id="planSelect" required></select>
           <button id="favBtn" class="icon" type="button" title="הוסף/הסר ממועדפים" aria-label="מועדף">☆</button>
@@ -48,19 +44,28 @@
         <input id="titleInput" type="text" maxlength="255" required>
       </div>
 
-      <div class="grid2">
-        <div class="field">
-          <label for="assigneeSelect">שיוך</label>
-          <select id="assigneeSelect"></select>
-        </div>
-        <div class="field">
-          <label for="dueInput">תאריך יעד</label>
-          <input id="dueInput" type="date">
-        </div>
+      <div class="field">
+        <label for="assigneeSelect">שיוך</label>
+        <select id="assigneeSelect"></select>
+        <input id="peopleSearch" type="search" class="filter after" placeholder="חיפוש אדם בארגון (שם או מייל)…" autocomplete="off">
+        <div id="peopleResults" class="results hidden" role="listbox"></div>
+        <p id="assigneeWarn" class="warn hidden">שים לב: האדם לא חבר בקבוצה של התוכנית, ולכן לא יראה את המשימה ב-Planner עד שיצורף לקבוצה.</p>
+      </div>
+
+      <div class="field">
+        <label for="dueInput">תאריך יעד</label>
+        <input id="dueInput" type="date">
+      </div>
+
+      <div class="field">
+        <label for="noteInput">הערה</label>
+        <textarea id="noteInput" rows="3" placeholder="הערה שתופיע בראש תיאור המשימה (לא חובה)"></textarea>
       </div>
 
       <div class="field">
         <label class="check"><input id="includeBody" type="checkbox" checked> לצרף את תוכן המייל לתיאור</label>
+        <textarea id="bodyInput" rows="6" aria-label="תוכן המייל (ניתן לעריכה)"></textarea>
+        <p class="muted small">אפשר לערוך או לקצר את תוכן המייל לפני היצירה.</p>
       </div>
 
       <button id="createBtn" class="primary big" type="submit">צור משימה</button>

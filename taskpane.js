@@ -10,9 +10,9 @@ import {
 /* global Office, __CONFIG__ */
 const CONFIG = __CONFIG__;
 const GRAPH = "https://graph.microsoft.com/v1.0";
-const SCOPES = ["User.Read", "Tasks.ReadWrite", "GroupMember.Read.All", "Mail.Read"];
+const SCOPES = ["User.Read", "User.ReadBasic.All", "Tasks.ReadWrite", "GroupMember.Read.All", "Mail.Read"];
 const MAX_DESC = 25000;
-const PLAN_CACHE_KEY = "m2p.plans.v1";
+const PLAN_CACHE_KEY = "m2p.plans.v2";
 
 const $ = (id) => document.getElementById(id);
 const state = {
@@ -24,6 +24,7 @@ const state = {
   favorites: [],      // [{id, title, groupId}]
   lastBucket: {},     // planId -> bucketId
   mail: null,         // {subject, fromName, fromAddr, received, body, restId}
+  members: new Set(), // user ids of the current plan's group
 };
 
 /* ---------------- UI helpers ---------------- */
@@ -155,32 +156,56 @@ async function graphAll(path) {
 }
 
 /* ---------------- Plans ---------------- */
-async function fetchPlans() {
-  const groups = (
-    await graphAll("/me/memberOf/microsoft.graph.group?$select=id,displayName,groupTypes&$top=999")
-  ).filter((g) => (g.groupTypes || []).includes("Unified"));
+function planGroupId(p) {
+  if (p.container && p.container.type === "group") return p.container.containerId;
+  return p.owner || null;
+}
 
-  const plans = [];
-  for (let i = 0; i < groups.length; i += 20) {
-    const chunk = groups.slice(i, i + 20);
+async function fetchPlans() {
+  const byId = new Map();
+  const add = (p, groupName) => {
+    if (!p || byId.has(p.id)) return;
+    byId.set(p.id, { id: p.id, title: p.title, groupId: planGroupId(p), groupName: groupName || "" });
+  };
+
+  // 1. Groups I'm a member of + groups I own (owners aren't always members).
+  const [memberOf, owned] = await Promise.all([
+    graphAll("/me/memberOf/microsoft.graph.group?$select=id,displayName,groupTypes&$top=999").catch(() => []),
+    graphAll("/me/ownedObjects/microsoft.graph.group?$select=id,displayName,groupTypes&$top=999").catch(() => []),
+  ]);
+  const groups = new Map();
+  [...memberOf, ...owned]
+    .filter((g) => (g.groupTypes || []).includes("Unified"))
+    .forEach((g) => groups.set(g.id, g));
+  const list = [...groups.values()];
+
+  for (let i = 0; i < list.length; i += 20) {
+    const chunk = list.slice(i, i + 20);
     const batch = await graph("/$batch", {
       method: "POST",
       body: {
         requests: chunk.map((g, idx) => ({
           id: String(idx),
           method: "GET",
-          url: `/groups/${g.id}/planner/plans?$select=id,title,owner`,
+          url: `/groups/${g.id}/planner/plans?$select=id,title,owner,container`,
         })),
       },
     });
     for (const r of batch.responses || []) {
       if (r.status !== 200) continue;
       const g = chunk[Number(r.id)];
-      for (const p of r.body?.value || []) {
-        plans.push({ id: p.id, title: p.title, groupId: g.id, groupName: g.displayName });
-      }
+      for (const p of r.body?.value || []) add(p, g.displayName);
     }
   }
+
+  // 2. Plans shared with me directly (incl. ones outside my group list).
+  const shared = await graphAll("/me/planner/plans?$select=id,title,owner,container").catch(() => []);
+  for (const p of shared) {
+    const gid = planGroupId(p);
+    add(p, gid && groups.get(gid) ? groups.get(gid).displayName : "");
+  }
+
+  const plans = [...byId.values()];
   plans.sort((a, b) => a.title.localeCompare(b.title, "he"));
   return plans;
 }
@@ -198,21 +223,30 @@ function writePlanCache(plans) {
   } catch {}
 }
 
+function planLabel(p) {
+  return p.groupName && p.groupName !== p.title ? `${p.title} · ${p.groupName}` : p.title;
+}
+
 function renderPlans(selectedId) {
   const sel = $("planSelect");
+  const keep = selectedId || sel.value;
+  const q = ($("planFilter").value || "").trim().toLowerCase();
   sel.innerHTML = "";
+  $("planCount").textContent = state.plans.length ? `(${state.plans.length})` : "";
   if (!state.plans.length) {
     sel.appendChild(option("", "לא נמצאו תוכניות"));
     return;
   }
-  for (const p of state.plans) {
-    const label = p.groupName && p.groupName !== p.title ? `${p.title} · ${p.groupName}` : p.title;
-    sel.appendChild(option(p.id, label));
+  const shown = q ? state.plans.filter((p) => planLabel(p).toLowerCase().includes(q)) : state.plans;
+  if (!shown.length) {
+    sel.appendChild(option("", "אין תוכנית שמתאימה לחיפוש"));
+    return;
   }
+  for (const p of shown) sel.appendChild(option(p.id, planLabel(p)));
   const pick =
-    (selectedId && state.plans.find((p) => p.id === selectedId)) ||
-    state.plans.find((p) => p.id === rsGet("lastPlanId")) ||
-    state.plans[0];
+    (keep && shown.find((p) => p.id === keep)) ||
+    shown.find((p) => p.id === rsGet("lastPlanId")) ||
+    shown[0];
   sel.value = pick.id;
 }
 
@@ -227,6 +261,8 @@ function renderFavorites() {
     b.className = "chip" + ($("planSelect").value === f.id ? " active" : "");
     b.textContent = f.title;
     b.addEventListener("click", () => {
+      $("planFilter").value = "";
+      renderPlans(f.id);
       $("planSelect").value = f.id;
       onPlanChange();
     });
@@ -279,7 +315,9 @@ async function onPlanChange() {
     if (lastB && buckets.some((b) => b.id === lastB)) bSel.value = lastB;
     bSel.disabled = false;
 
+    state.members = new Set(members.map((m) => m.id));
     const prevAssignee = aSel.value || state.me.id;
+    const prevLabel = aSel.selectedOptions[0] ? aSel.selectedOptions[0].textContent : "";
     aSel.innerHTML = "";
     aSel.appendChild(option(state.me.id, "אני"));
     aSel.appendChild(option("", "ללא שיוך"));
@@ -287,10 +325,79 @@ async function onPlanChange() {
       .filter((m) => m.id !== state.me.id)
       .sort((a, b) => (a.displayName || "").localeCompare(b.displayName || "", "he"))
       .forEach((m) => aSel.appendChild(option(m.id, m.displayName)));
-    aSel.value = [...aSel.options].some((o) => o.value === prevAssignee) ? prevAssignee : state.me.id;
+    if (prevAssignee && ![...aSel.options].some((o) => o.value === prevAssignee) && prevLabel) {
+      aSel.appendChild(option(prevAssignee, prevLabel));
+    }
+    aSel.value = prevAssignee;
+    updateAssigneeWarning();
   } catch (e) {
     if (seq === planChangeSeq) showError(e);
   }
+}
+
+/* ---------------- People search (whole organization) ---------------- */
+function updateAssigneeWarning() {
+  const id = $("assigneeSelect").value;
+  const plan = currentPlan();
+  const show = !!(id && plan && plan.groupId && state.members.size && !state.members.has(id) && id !== state.me.id);
+  $("assigneeWarn").classList.toggle("hidden", !show);
+}
+
+let peopleTimer = null;
+let peopleSeq = 0;
+function onPeopleInput() {
+  clearTimeout(peopleTimer);
+  const q = $("peopleSearch").value.trim();
+  if (q.length < 2) {
+    $("peopleResults").classList.add("hidden");
+    return;
+  }
+  peopleTimer = setTimeout(() => searchPeople(q), 300);
+}
+
+async function searchPeople(q) {
+  const seq = ++peopleSeq;
+  const box = $("peopleResults");
+  const safe = q.replace(/"/g, "");
+  try {
+    const res = await graph(
+      `/users?$search=${encodeURIComponent(`"displayName:${safe}" OR "mail:${safe}"`)}` +
+        `&$select=id,displayName,mail,jobTitle&$top=15&$filter=accountEnabled eq true&$count=true`,
+      { headers: { ConsistencyLevel: "eventual" } }
+    );
+    if (seq !== peopleSeq) return;
+    box.innerHTML = "";
+    const people = (res.value || []).filter((u) => u.mail);
+    if (!people.length) {
+      box.innerHTML = '<div class="muted small" style="padding:8px 10px">לא נמצאו אנשים</div>';
+    }
+    for (const u of people) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.textContent = u.displayName;
+      const sub = document.createElement("span");
+      sub.className = "sub";
+      sub.textContent = [u.jobTitle, u.mail].filter(Boolean).join(" · ");
+      b.appendChild(sub);
+      b.addEventListener("click", () => pickPerson(u));
+      box.appendChild(b);
+    }
+    box.classList.remove("hidden");
+  } catch (e) {
+    if (seq !== peopleSeq) return;
+    box.innerHTML = '<div class="muted small" style="padding:8px 10px">החיפוש נכשל: ' +
+      String(e.message || e).replace(/</g, "&lt;") + "</div>";
+    box.classList.remove("hidden");
+  }
+}
+
+function pickPerson(u) {
+  const aSel = $("assigneeSelect");
+  if (![...aSel.options].some((o) => o.value === u.id)) aSel.appendChild(option(u.id, u.displayName));
+  aSel.value = u.id;
+  $("peopleSearch").value = "";
+  $("peopleResults").classList.add("hidden");
+  updateAssigneeWarning();
 }
 
 /* ---------------- Mail ---------------- */
@@ -338,8 +445,9 @@ function encodeRefKey(url) {
   return url.replace(/%/g, "%25").replace(/\./g, "%2E").replace(/:/g, "%3A").replace(/@/g, "%40").replace(/#/g, "%23");
 }
 
-function buildDescription(mail, includeBody) {
+function buildDescription(mail, note, body) {
   const lines = [];
+  if (note) lines.push(note, "", "────────────", "");
   lines.push(`מאת: ${mail.fromName}${mail.fromAddr ? ` <${mail.fromAddr}>` : ""}`);
   if (mail.received) {
     lines.push(
@@ -348,14 +456,19 @@ function buildDescription(mail, includeBody) {
     );
   }
   lines.push(`נושא: ${mail.subject}`);
-  if (includeBody && mail.body) {
+  if (body) {
     lines.push("", "────────────", "");
-    let body = mail.body.replace(/\r\n/g, "\n").replace(/\n{3,}/g, "\n\n");
+    body = body.replace(/\r\n/g, "\n").replace(/\n{3,}/g, "\n\n");
     const room = MAX_DESC - lines.join("\n").length - 40;
     if (body.length > room) body = body.slice(0, room) + "\n…(קוצר)";
     lines.push(body);
   }
   return lines.join("\n");
+}
+
+function fillMailFields() {
+  $("titleInput").value = state.mail.subject;
+  $("bodyInput").value = state.mail.body;
 }
 
 async function getDetailsEtag(taskId) {
@@ -402,7 +515,11 @@ async function createTask(ev) {
       getWebLink(state.mail.restId),
     ]);
     const details = {
-      description: buildDescription(state.mail, $("includeBody").checked),
+      description: buildDescription(
+        state.mail,
+        $("noteInput").value.trim(),
+        $("includeBody").checked ? $("bodyInput").value.trim() : ""
+      ),
       previewType: "description",
     };
     if (webLink) {
@@ -429,6 +546,7 @@ async function createTask(ev) {
     }`;
     $("openTaskLink").href = `https://tasks.office.com/${state.tenantId}/Home/Task/${task.id}`;
     show("done");
+    $("noteInput").value = "";
   } catch (e) {
     showError(e);
   } finally {
@@ -445,7 +563,7 @@ async function loadEverything() {
 
   setStatus("קורא את המייל…");
   state.mail = await loadMail();
-  $("titleInput").value = state.mail.subject;
+  fillMailFields();
 
   const cached = readPlanCache();
   if (cached && cached.length) {
@@ -483,10 +601,25 @@ async function start() {
 }
 
 Office.onReady(async () => {
+  if (!Office.context || !Office.context.mailbox) {
+    showError("יש לפתוח את התוסף מתוך Outlook (מתוך מייל פתוח).");
+    return;
+  }
   state.favorites = rsGet("favorites", []);
   state.lastBucket = rsGet("lastBucket", {});
 
   $("planSelect").addEventListener("change", onPlanChange);
+  $("planFilter").addEventListener("input", () => {
+    const before = $("planSelect").value;
+    renderPlans();
+    if ($("planSelect").value !== before) onPlanChange();
+    else renderFavorites();
+  });
+  $("assigneeSelect").addEventListener("change", updateAssigneeWarning);
+  $("peopleSearch").addEventListener("input", onPeopleInput);
+  $("includeBody").addEventListener("change", () =>
+    $("bodyInput").classList.toggle("hidden", !$("includeBody").checked)
+  );
   $("favBtn").addEventListener("click", toggleFavorite);
   $("taskForm").addEventListener("submit", createTask);
   $("retryBtn").addEventListener("click", start);
@@ -505,7 +638,8 @@ Office.onReady(async () => {
     Office.context.mailbox.addHandlerAsync(Office.EventType.ItemChanged, async () => {
       if (!Office.context.mailbox.item) return;
       state.mail = await loadMail();
-      $("titleInput").value = state.mail.subject;
+      fillMailFields();
+      $("noteInput").value = "";
       show("taskForm");
     });
   } catch {}

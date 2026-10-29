@@ -81,3 +81,24 @@ button.icon.on { background: var(--accent-soft); }
 .card p { margin: 0 0 8px; }
 .foot { margin-top: 20px; font-size: 12px; text-align: center; }
 @media (max-width: 340px) { .grid2 { grid-template-columns: 1fr; } }
+textarea {
+  width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--field); color: var(--fg); font: inherit; font-size: 14px; resize: vertical;
+}
+textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+#bodyInput { margin-top: 6px; }
+input[type=search].filter {
+  width: 100%; min-height: 36px; padding: 6px 10px; margin-bottom: 6px;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--field); color: var(--fg); font: inherit; font-size: 14px;
+}
+input[type=search].filter.after { margin: 6px 0 0; }
+.small { font-size: 12px; font-weight: 400; }
+.results { border: 1px solid var(--line); border-radius: 8px; margin-top: 4px; max-height: 220px; overflow-y: auto; }
+.results button {
+  display: block; width: 100%; text-align: start; border: 0; border-bottom: 1px solid var(--line);
+  border-radius: 0; min-height: 40px; padding: 6px 10px; background: var(--field);
+}
+.results button:last-child { border-bottom: 0; }
+.results button:hover, .results button:focus { background: var(--accent-soft); }
+.results .sub { display: block; font-size: 12px; color: var(--muted); }
+.warn { margin: 6px 0 0; font-size: 13px; color: var(--err); }
