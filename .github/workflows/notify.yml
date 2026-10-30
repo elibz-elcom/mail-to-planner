@@ -16,7 +16,7 @@ jobs:
   alert:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+      - uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         with:
           script: |
             const p = context.payload;
@@ -27,7 +27,17 @@ jobs:
               const author = c.author ? `${c.author.name} <${c.author.email}>` : "";
               return `- [\`${c.id.slice(0, 7)}\`](${c.url}) ${first} — ${author}`;
             });
-            const files = [...new Set((p.commits || []).flatMap((c) => [...c.added, ...c.modified, ...c.removed]))];
+            const { owner, repo } = context.repo;
+            let files = [...new Set((p.commits || []).flatMap((c) => [...(c.added || []), ...(c.modified || []), ...(c.removed || [])]))];
+            // Web-UI commits arrive without file lists; ask the compare API instead.
+            if (!files.length && p.before && p.after && !/^0+$/.test(p.before) && !/^0+$/.test(p.after)) {
+              try {
+                const { data } = await github.rest.repos.compareCommitsWithBasehead({ owner, repo, basehead: `${p.before}...${p.after}` });
+                files = (data.files || []).map((f) => `${f.filename} (${f.status})`);
+              } catch (e) {
+                core.warning(`compare failed: ${e.message}`);
+              }
+            }
             const body = [
               "@elibz-elcom — the code in this repository was changed.",
               "",
@@ -46,6 +56,5 @@ jobs:
               "If you didn't make this change: change your GitHub password, review Settings → Security log, and revert the commit.",
             ].filter((l, i, a) => l !== "" || a[i - 1] !== "").join("\n");
             const title = `Code change on ${ref} by ${who} (${(p.after || "").slice(0, 7)})`;
-            const { owner, repo } = context.repo;
             const { data: issue } = await github.rest.issues.create({ owner, repo, title, body });
             await github.rest.issues.update({ owner, repo, issue_number: issue.number, state: "closed", state_reason: "completed" });
