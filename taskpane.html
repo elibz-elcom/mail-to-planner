@@ -20,6 +20,8 @@
     </section>
 
     <form id="taskForm" class="hidden" novalidate>
+      <p id="doneBefore" class="notice hidden">✓ כבר נוצרה משימה מהמייל הזה</p>
+
       <div id="favRow" class="field hidden">
         <span class="label">מועדפים</span>
         <div id="favChips" class="chips"></div>
@@ -35,8 +37,9 @@
       </div>
 
       <div class="field">
-        <label for="bucketSelect">Bucket</label>
+        <label for="bucketSelect">מיכל</label>
         <select id="bucketSelect"></select>
+        <input id="newBucketInput" type="text" class="after hidden" maxlength="255" placeholder="שם המיכל החדש">
       </div>
 
       <div class="field">
@@ -52,14 +55,40 @@
         <p id="assigneeWarn" class="warn hidden">שים לב: האדם לא חבר בקבוצה של התוכנית, ולכן לא יראה את המשימה ב-Planner עד שיצורף לקבוצה.</p>
       </div>
 
+      <div class="grid2">
+        <div class="field">
+          <label for="startInput">תאריך התחלה</label>
+          <input id="startInput" type="date">
+        </div>
+        <div class="field">
+          <label for="dueInput">תאריך יעד</label>
+          <input id="dueInput" type="date">
+        </div>
+      </div>
+      <p id="dateWarn" class="warn hidden">תאריך היעד לפני תאריך ההתחלה.</p>
+
       <div class="field">
-        <label for="dueInput">תאריך יעד</label>
-        <input id="dueInput" type="date">
+        <label for="prioritySelect">עדיפות</label>
+        <select id="prioritySelect">
+          <option value="1">🔴 דחוף</option>
+          <option value="3">❗ חשוב</option>
+          <option value="5" selected>בינוני</option>
+          <option value="9">⬇ נמוך</option>
+        </select>
       </div>
 
       <div class="field">
-        <label for="noteInput">הערה</label>
-        <textarea id="noteInput" rows="3" placeholder="הערה שתופיע בראש תיאור המשימה (לא חובה)"></textarea>
+        <span class="label">תוויות</span>
+        <div id="labelChips" class="chips"></div>
+        <div class="row after">
+          <input id="newLabelInput" type="text" maxlength="40" placeholder="תווית חדשה…" autocomplete="off">
+          <button id="addLabelBtn" class="icon" type="button" title="צור תווית" aria-label="צור תווית">+</button>
+        </div>
+        <p id="labelErr" class="warn hidden"></p>
+      </div>
+
+      <div class="field">
+        <label class="check"><input id="includeAttachments" type="checkbox" checked> קבצים מצורפים <span id="attCount" class="muted small"></span></label>
       </div>
 
       <div class="field">
@@ -68,12 +97,17 @@
         <p class="muted small">אפשר לערוך או לקצר את תוכן המייל לפני היצירה.</p>
       </div>
 
+      <div class="field">
+        <label class="check"><input id="markMail" type="checkbox" checked> לסמן את המייל בקטגוריה ירוקה "משימה ב-Planner"</label>
+      </div>
+
       <button id="createBtn" class="primary big" type="submit">צור משימה</button>
     </form>
 
     <section id="done" class="card success hidden">
       <p class="big-text">✔ המשימה נוצרה</p>
       <p id="doneDetails" class="muted"></p>
+      <p id="doneWarn" class="warn hidden"></p>
       <a id="openTaskLink" class="primary linkbtn" target="_blank" rel="noopener">פתח ב-Planner</a>
       <button id="againBtn" type="button" class="secondary">משימה נוספת מאותו מייל</button>
     </section>
@@ -83,11 +117,12 @@
       <button id="retryBtn" type="button" class="secondary">נסה שוב</button>
     </section>
 
-    <footer class="foot">
+    <footer class="foot" dir="ltr">
       <picture>
         <source srcset="elcom-logo-dark.png" media="(prefers-color-scheme: dark)">
-        <img src="elcom-logo.png" width="68" height="40" alt="Elcom IT">
+        <img src="elcom-logo.png" width="55" height="32" alt="">
       </picture>
+      <span class="brand">Elcom IT</span>
     </footer>
   </main>
   <script src="taskpane.js"></script>

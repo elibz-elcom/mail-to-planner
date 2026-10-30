@@ -79,8 +79,9 @@ button.icon.on { background: var(--accent-soft); }
 .card.error { border-color: var(--err); background: var(--err-soft); }
 .big-text { font-size: 18px; font-weight: 600; margin: 0; color: var(--ok); }
 .card p { margin: 0 0 8px; }
-.foot { margin-top: 20px; display: flex; justify-content: center; }
-.foot img { display: block; height: 40px; width: auto; opacity: .9; }
+.foot { margin-top: 20px; display: flex; justify-content: center; align-items: center; gap: 8px; }
+.foot img { display: block; height: 32px; width: auto; }
+.foot .brand { font-size: 14px; font-weight: 600; color: var(--fg); letter-spacing: .2px; }
 @media (max-width: 340px) { .grid2 { grid-template-columns: 1fr; } }
 textarea {
   width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px;
@@ -103,3 +104,11 @@ input[type=search].filter.after { margin: 6px 0 0; }
 .results button:hover, .results button:focus { background: var(--accent-soft); }
 .results .sub { display: block; font-size: 12px; color: var(--muted); }
 .warn { margin: 6px 0 0; font-size: 13px; color: var(--err); }
+.after { margin-top: 6px; }
+.row.after input { flex: 1; min-width: 0; }
+.label-chip { border-color: var(--line); background: var(--field); display: inline-flex; align-items: center; gap: 6px; }
+.label-chip .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+.label-chip.on { border-color: var(--accent); background: var(--accent-soft); font-weight: 600; }
+.label-chip.on::after { content: "✓"; color: var(--accent); }
+.notice { margin: 0 0 12px; padding: 8px 10px; border-radius: 8px; font-size: 13px; background: var(--accent-soft); color: var(--fg); border: 1px solid var(--accent); }
+input:disabled + * , label.check input:disabled { opacity: .5; }

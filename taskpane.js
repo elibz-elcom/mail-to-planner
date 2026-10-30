@@ -11,8 +11,20 @@ import {
 const CONFIG = __CONFIG__;
 const GRAPH = "https://graph.microsoft.com/v1.0";
 const SCOPES = ["User.Read", "User.ReadBasic.All", "Tasks.ReadWrite", "GroupMember.Read.All", "Mail.Read"];
+const MAIL_WRITE_SCOPES = [...SCOPES, "Mail.ReadWrite", "MailboxSettings.ReadWrite"];
+const FILE_SCOPES = [...SCOPES, "Files.ReadWrite.All"];
 const MAX_DESC = 25000;
 const PLAN_CACHE_KEY = "m2p.plans.v2";
+const MAIL_CATEGORY = "משימה ב-Planner";
+const NEW_BUCKET = "__new__";
+const ATTACH_FOLDER = "Planner Attachments";
+const SIMPLE_UPLOAD_MAX = 4 * 1024 * 1024;
+const UPLOAD_CHUNK = 327680 * 16;
+const LABEL_COLORS = [
+  "", "#e8478b", "#d13438", "#f2c80f", "#13a10e", "#0f6cbd", "#8764b8", "#a87b45", "#8cbd18",
+  "#00b7c3", "#69797e", "#a0aeb2", "#8e562e", "#c50f1f", "#f7630c", "#ff8c00", "#eaa300",
+  "#7fba00", "#0b6a0b", "#038387", "#4f9fe0", "#003966", "#b4a0ff", "#5c2e91", "#c8c6c4", "#3b3a39",
+];
 
 const $ = (id) => document.getElementById(id);
 const state = {
@@ -25,6 +37,10 @@ const state = {
   lastBucket: {},     // planId -> bucketId
   mail: null,         // {subject, fromName, fromAddr, received, body, restId}
   members: new Set(), // user ids of the current plan's group
+  catDesc: {},        // plan label names: category1..25 -> name
+  selectedLabels: new Set(),
+  mailInfo: null,     // {webLink, categories, files}
+  mailInfoPromise: null,
 };
 
 /* ---------------- UI helpers ---------------- */
@@ -92,21 +108,17 @@ async function initAuth() {
   state.naa = !!naa;
 }
 
-async function getToken(interactive = false) {
-  const accounts = state.pca.getAllAccounts();
-  const account = state.account || accounts[0];
-  const req = { scopes: SCOPES, account };
+async function getToken(interactive = false, scopes = SCOPES) {
+  const account = state.account || state.pca.getAllAccounts()[0];
   if (!interactive) {
     try {
-      const r = await state.pca.acquireTokenSilent(req);
-      return remember(r);
+      return remember(await state.pca.acquireTokenSilent({ scopes, account }));
     } catch (e) {
       // NAA can usually complete interactively without a user gesture.
       if (!state.naa) throw Object.assign(new Error("interaction_required"), { needsSignIn: true });
     }
   }
-  const r = await state.pca.acquireTokenPopup({ scopes: SCOPES });
-  return remember(r);
+  return remember(await state.pca.acquireTokenPopup({ scopes }));
 }
 function remember(r) {
   state.account = r.account;
@@ -115,22 +127,23 @@ function remember(r) {
 }
 
 /* ---------------- Graph ---------------- */
-async function graph(path, { method = "GET", body, headers = {}, raw = false } = {}, attempt = 0) {
-  const token = await getToken();
+async function graph(path, opts = {}, attempt = 0) {
+  const { method = "GET", body, headers = {}, raw = false, scopes = SCOPES, binary = false } = opts;
+  const token = await getToken(false, scopes);
   const url = path.startsWith("http") ? path : GRAPH + path;
   const res = await fetch(url, {
     method,
     headers: {
       Authorization: "Bearer " + token,
-      ...(body ? { "Content-Type": "application/json" } : {}),
+      ...(body ? { "Content-Type": binary ? "application/octet-stream" : "application/json" } : {}),
       ...headers,
     },
-    body: body ? JSON.stringify(body) : undefined,
+    body: body ? (binary ? body : JSON.stringify(body)) : undefined,
   });
   if ((res.status === 429 || res.status === 503) && attempt < 3) {
     const wait = Number(res.headers.get("Retry-After") || 2) * 1000;
     await new Promise((r) => setTimeout(r, wait));
-    return graph(path, { method, body, headers, raw }, attempt + 1);
+    return graph(path, opts, attempt + 1);
   }
   if (raw) return res;
   if (!res.ok) {
@@ -141,7 +154,8 @@ async function graph(path, { method = "GET", body, headers = {}, raw = false } =
     throw new Error(`Graph ${res.status}: ${detail}`);
   }
   if (res.status === 204) return null;
-  return res.json();
+  const text = await res.text();
+  return text ? JSON.parse(text) : null;
 }
 
 async function graphAll(path) {
@@ -299,21 +313,32 @@ async function onPlanChange() {
   bSel.innerHTML = "";
   bSel.appendChild(option("", "טוען…"));
   bSel.disabled = true;
+  $("labelChips").innerHTML = '<span class="muted small">טוען…</span>';
 
   try {
-    const [buckets, members] = await Promise.all([
+    const [buckets, members, details] = await Promise.all([
       graphAll(`/planner/plans/${plan.id}/buckets?$select=id,name,orderHint`),
-      graphAll(`/groups/${plan.groupId}/members/microsoft.graph.user?$select=id,displayName&$top=200`).catch(() => []),
+      plan.groupId
+        ? graphAll(`/groups/${plan.groupId}/members/microsoft.graph.user?$select=id,displayName&$top=200`).catch(() => [])
+        : Promise.resolve([]),
+      graph(`/planner/plans/${plan.id}/details?$select=categoryDescriptions`).catch(() => null),
     ]);
     if (seq !== planChangeSeq) return;
 
     buckets.sort((a, b) => (a.orderHint < b.orderHint ? 1 : -1));
     bSel.innerHTML = "";
-    if (!buckets.length) bSel.appendChild(option("", "ללא Bucket"));
+    if (!buckets.length) bSel.appendChild(option("", "ללא מיכל"));
     buckets.forEach((b) => bSel.appendChild(option(b.id, b.name)));
+    bSel.appendChild(option(NEW_BUCKET, "➕ מיכל חדש…"));
     const lastB = state.lastBucket[plan.id];
     if (lastB && buckets.some((b) => b.id === lastB)) bSel.value = lastB;
     bSel.disabled = false;
+    onBucketChange();
+
+    state.catDesc = (details && details.categoryDescriptions) || {};
+    state.selectedLabels = new Set();
+    $("labelErr").classList.add("hidden");
+    renderLabels();
 
     state.members = new Set(members.map((m) => m.id));
     const prevAssignee = aSel.value || state.me.id;
@@ -332,6 +357,91 @@ async function onPlanChange() {
     updateAssigneeWarning();
   } catch (e) {
     if (seq === planChangeSeq) showError(e);
+  }
+}
+
+/* ---------------- Buckets ---------------- */
+function onBucketChange() {
+  const isNew = $("bucketSelect").value === NEW_BUCKET;
+  $("newBucketInput").classList.toggle("hidden", !isNew);
+  if (isNew) $("newBucketInput").focus();
+}
+
+/* ---------------- Labels (Planner categories) ---------------- */
+function labelEntries() {
+  return Object.entries(state.catDesc)
+    .filter(([k, v]) => /^category\d+$/.test(k) && v)
+    .map(([k, v]) => ({ key: k, name: v, n: Number(k.slice(8)) }))
+    .sort((a, b) => a.n - b.n);
+}
+
+function renderLabels() {
+  const wrap = $("labelChips");
+  wrap.innerHTML = "";
+  const list = labelEntries();
+  if (!list.length) {
+    wrap.innerHTML = '<span class="muted small">אין עדיין תוויות בתוכנית הזו</span>';
+    return;
+  }
+  for (const l of list) {
+    const on = state.selectedLabels.has(l.key);
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "chip label-chip" + (on ? " on" : "");
+    b.setAttribute("aria-pressed", on ? "true" : "false");
+    const dot = document.createElement("span");
+    dot.className = "dot";
+    dot.style.background = LABEL_COLORS[l.n] || "#888";
+    b.append(dot, document.createTextNode(l.name));
+    b.addEventListener("click", () => {
+      if (state.selectedLabels.has(l.key)) state.selectedLabels.delete(l.key);
+      else state.selectedLabels.add(l.key);
+      renderLabels();
+    });
+    wrap.appendChild(b);
+  }
+}
+
+async function addLabel() {
+  const input = $("newLabelInput");
+  const name = input.value.trim();
+  const plan = currentPlan();
+  const err = $("labelErr");
+  err.classList.add("hidden");
+  if (!name || !plan) return;
+  const existing = labelEntries().find((l) => l.name === name);
+  if (existing) {
+    state.selectedLabels.add(existing.key);
+    input.value = "";
+    renderLabels();
+    return;
+  }
+  const btn = $("addLabelBtn");
+  btn.disabled = true;
+  try {
+    const res = await graph(`/planner/plans/${plan.id}/details`, { raw: true });
+    if (!res.ok) throw new Error(`Graph ${res.status}`);
+    const d = await res.json();
+    const desc = d.categoryDescriptions || {};
+    let slot = null;
+    for (let i = 1; i <= 25; i++) {
+      if (!desc["category" + i]) { slot = "category" + i; break; }
+    }
+    if (!slot) throw new Error("כל 25 התוויות בתוכנית כבר בשימוש.");
+    await graph(`/planner/plans/${plan.id}/details`, {
+      method: "PATCH",
+      body: { categoryDescriptions: { [slot]: name } },
+      headers: { "If-Match": d["@odata.etag"], Prefer: "return=minimal" },
+    });
+    state.catDesc = { ...desc, [slot]: name };
+    state.selectedLabels.add(slot);
+    input.value = "";
+    renderLabels();
+  } catch (e) {
+    err.textContent = "לא הצלחתי ליצור את התווית: " + (e.message || e);
+    err.classList.remove("hidden");
+  } finally {
+    btn.disabled = false;
   }
 }
 
@@ -430,14 +540,143 @@ function loadMail() {
   });
 }
 
-async function getWebLink(restId) {
-  if (!restId) return null;
-  try {
-    const m = await graph(`/me/messages/${encodeURIComponent(restId)}?$select=webLink`);
-    return m.webLink || null;
-  } catch {
-    return null;
+let mailSeq = 0;
+async function loadMailInfo() {
+  const seq = ++mailSeq;
+  state.mailInfo = null;
+  $("doneBefore").classList.add("hidden");
+  $("attCount").textContent = "";
+  $("includeAttachments").disabled = false;
+  const empty = { webLink: null, categories: [], files: [] };
+  if (!state.mail || !state.mail.restId) {
+    state.mailInfo = empty;
+    return;
   }
+  const id = encodeURIComponent(state.mail.restId);
+  try {
+    const [m, atts] = await Promise.all([
+      graph(`/me/messages/${id}?$select=webLink,categories`),
+      graphAll(`/me/messages/${id}/attachments?$select=id,name,size,isInline,contentType`).catch(() => []),
+    ]);
+    if (seq !== mailSeq) return;
+    const files = atts.filter(
+      (a) => a["@odata.type"] === "#microsoft.graph.fileAttachment" && !a.isInline
+    );
+    state.mailInfo = { webLink: m.webLink || null, categories: m.categories || [], files };
+  } catch {
+    if (seq !== mailSeq) return;
+    state.mailInfo = empty;
+  }
+  const info = state.mailInfo;
+  $("doneBefore").classList.toggle("hidden", !info.categories.includes(MAIL_CATEGORY));
+  $("attCount").textContent = info.files.length ? `(${info.files.length})` : "(אין במייל)";
+  $("includeAttachments").disabled = !info.files.length;
+}
+
+function safeName(s, max = 80) {
+  const clean = (s || "").replace(/[\\/:*?"<>|#%\u0000-\u001f]/g, " ").replace(/\s+/g, " ").trim();
+  return (clean || "mail").slice(0, max).replace(/[. ]+$/, "");
+}
+
+function refType(name) {
+  const ext = (name.split(".").pop() || "").toLowerCase();
+  if (["doc", "docx", "docm", "rtf", "odt"].includes(ext)) return "Word";
+  if (["xls", "xlsx", "xlsm", "csv", "ods"].includes(ext)) return "Excel";
+  if (["ppt", "pptx", "pptm", "odp"].includes(ext)) return "PowerPoint";
+  if (ext === "pdf") return "Pdf";
+  return "Other";
+}
+
+function encPath(p) {
+  return p.split("/").map(encodeURIComponent).join("/");
+}
+
+async function uploadToGroup(groupId, path, blob) {
+  const base = `/groups/${groupId}/drive/root:/${encPath(path)}:`;
+  if (blob.size <= SIMPLE_UPLOAD_MAX) {
+    return graph(`${base}/content?@microsoft.graph.conflictBehavior=rename`, {
+      method: "PUT", body: blob, binary: true, scopes: FILE_SCOPES,
+    });
+  }
+  const session = await graph(`${base}/createUploadSession`, {
+    method: "POST",
+    body: { item: { "@microsoft.graph.conflictBehavior": "rename" } },
+    scopes: FILE_SCOPES,
+  });
+  let start = 0;
+  let last = null;
+  while (start < blob.size) {
+    const end = Math.min(start + UPLOAD_CHUNK, blob.size);
+    last = await fetch(session.uploadUrl, {
+      method: "PUT",
+      headers: { "Content-Range": `bytes ${start}-${end - 1}/${blob.size}` },
+      body: blob.slice(start, end),
+    });
+    if (!last.ok) throw new Error(`upload ${last.status}`);
+    start = end;
+  }
+  return last.json();
+}
+
+async function uploadAttachments(plan, onProgress) {
+  const files = (state.mailInfo && state.mailInfo.files) || [];
+  if (!files.length) return { refs: {}, failed: 0 };
+  if (!plan.groupId) throw new Error("לתוכנית הזו אין ספריית קבצים של קבוצה");
+  const id = encodeURIComponent(state.mail.restId);
+  const stamp = new Date().toISOString().slice(0, 10);
+  const folder = `${ATTACH_FOLDER}/${safeName(plan.title, 60)}/${stamp} ${safeName(state.mail.subject, 60)}`;
+  const refs = {};
+  let failed = 0;
+  let lastErr = null;
+  for (let i = 0; i < files.length; i++) {
+    const f = files[i];
+    onProgress(i + 1, files.length);
+    try {
+      const res = await graph(`/me/messages/${id}/attachments/${encodeURIComponent(f.id)}/$value`, { raw: true });
+      if (!res.ok) throw new Error(`Graph ${res.status}`);
+      const blob = await res.blob();
+      const item = await uploadToGroup(plan.groupId, `${folder}/${safeName(f.name, 120)}`, blob);
+      refs[encodeRefKey(item.webUrl)] = {
+        "@odata.type": "microsoft.graph.plannerExternalReference",
+        alias: f.name,
+        type: refType(f.name),
+      };
+    } catch (e) {
+      console.error(e);
+      lastErr = e;
+      failed++;
+    }
+  }
+  if (failed === files.length && lastErr) throw lastErr;
+  return { refs, failed };
+}
+
+async function markMail() {
+  const id = encodeURIComponent(state.mail.restId);
+  try {
+    const found = await graph("/me/outlook/masterCategories", { scopes: MAIL_WRITE_SCOPES });
+    if (!(found.value || []).some((c) => c.displayName === MAIL_CATEGORY)) {
+      await graph("/me/outlook/masterCategories", {
+        method: "POST",
+        body: { displayName: MAIL_CATEGORY, color: "preset4" },
+        scopes: MAIL_WRITE_SCOPES,
+      });
+    }
+  } catch (e) {
+    console.warn(e); // the category still applies, just without the green color
+  }
+  const current = (state.mailInfo && state.mailInfo.categories) || [];
+  const cats = Array.from(new Set([...current, MAIL_CATEGORY]));
+  await graph(`/me/messages/${id}`, { method: "PATCH", body: { categories: cats }, scopes: MAIL_WRITE_SCOPES });
+  if (state.mailInfo) state.mailInfo.categories = cats;
+}
+
+function friendly(e, prefix) {
+  const m = String((e && e.message) || e);
+  if (/40[13]|consent|AADSTS65001|interaction_required|insufficient|Access ?Denied/i.test(m)) {
+    return `${prefix}: חסרה הרשאה. צריך לתת Admin consent להרשאות החדשות ב-Entra.`;
+  }
+  return `${prefix}: ${m}`;
 }
 
 /* ---------------- Create task ---------------- */
@@ -445,9 +684,8 @@ function encodeRefKey(url) {
   return url.replace(/%/g, "%25").replace(/\./g, "%2E").replace(/:/g, "%3A").replace(/@/g, "%40").replace(/#/g, "%23");
 }
 
-function buildDescription(mail, note, body) {
+function buildDescription(mail, body) {
   const lines = [];
-  if (note) lines.push(note, "", "────────────", "");
   lines.push(`מאת: ${mail.fromName}${mail.fromAddr ? ` <${mail.fromAddr}>` : ""}`);
   if (mail.received) {
     lines.push(
@@ -483,6 +721,14 @@ async function getDetailsEtag(taskId) {
   throw new Error("לא הצלחתי לעדכן את פרטי המשימה (המשימה עצמה נוצרה).");
 }
 
+function checkDates() {
+  const start = $("startInput").value;
+  const due = $("dueInput").value;
+  const bad = !!(start && due && due < start);
+  $("dateWarn").classList.toggle("hidden", !bad);
+  return !bad;
+}
+
 async function createTask(ev) {
   ev.preventDefault();
   const plan = currentPlan();
@@ -492,66 +738,119 @@ async function createTask(ev) {
     $("titleInput").focus();
     return;
   }
-  const bucketId = $("bucketSelect").value || undefined;
+  if (!checkDates()) {
+    $("dueInput").focus();
+    return;
+  }
+  const bSel = $("bucketSelect");
+  let bucketId = bSel.value || undefined;
+  const newBucketName = $("newBucketInput").value.trim();
+  if (bucketId === NEW_BUCKET && !newBucketName) {
+    $("newBucketInput").focus();
+    return;
+  }
   const assignee = $("assigneeSelect").value;
+  const start = $("startInput").value;
   const due = $("dueInput").value;
+  const warnings = [];
 
   const btn = $("createBtn");
+  const setBtn = (t) => (btn.textContent = t);
   btn.disabled = true;
-  btn.textContent = "יוצר משימה…";
+  setBtn("יוצר משימה…");
   try {
-    const payload = { planId: plan.id, title: title.slice(0, 255) };
+    if (state.mailInfoPromise) await state.mailInfoPromise;
+
+    let bucketName = bSel.selectedOptions[0] ? bSel.selectedOptions[0].textContent : "";
+    if (bucketId === NEW_BUCKET) {
+      const b = await graph("/planner/buckets", {
+        method: "POST",
+        body: { name: newBucketName, planId: plan.id, orderHint: " !" },
+      });
+      bucketId = b.id;
+      bucketName = b.name;
+      bSel.insertBefore(option(b.id, b.name), bSel.querySelector(`option[value="${NEW_BUCKET}"]`));
+      bSel.value = b.id;
+      $("newBucketInput").value = "";
+      onBucketChange();
+    }
+
+    const payload = {
+      planId: plan.id,
+      title: title.slice(0, 255),
+      priority: Number($("prioritySelect").value) || 5,
+    };
     if (bucketId) payload.bucketId = bucketId;
+    if (start) payload.startDateTime = new Date(start + "T08:00:00").toISOString();
     if (due) payload.dueDateTime = new Date(due + "T17:00:00").toISOString();
     if (assignee) {
       payload.assignments = {
         [assignee]: { "@odata.type": "#microsoft.graph.plannerAssignment", orderHint: " !" },
       };
     }
+    if (state.selectedLabels.size) {
+      payload.appliedCategories = Object.fromEntries([...state.selectedLabels].map((k) => [k, true]));
+    }
     const task = await graph("/planner/tasks", { method: "POST", body: payload });
 
-    const [etag, webLink] = await Promise.all([
-      getDetailsEtag(task.id),
-      getWebLink(state.mail.restId),
-    ]);
+    let refs = {};
+    const info = state.mailInfo || { files: [] };
+    if ($("includeAttachments").checked && info.files.length) {
+      try {
+        const r = await uploadAttachments(plan, (i, n) => setBtn(`מעלה קבצים (${i}/${n})…`));
+        refs = r.refs;
+        if (r.failed) warnings.push(`${r.failed} מתוך ${info.files.length} הקבצים לא צורפו.`);
+      } catch (e) {
+        warnings.push(friendly(e, "הקבצים המצורפים לא צורפו"));
+      }
+    }
+
+    setBtn("משלים פרטים…");
+    const etag = await getDetailsEtag(task.id);
     const details = {
       description: buildDescription(
         state.mail,
-        $("noteInput").value.trim(),
         $("includeBody").checked ? $("bodyInput").value.trim() : ""
       ),
       previewType: "description",
     };
-    if (webLink) {
-      details.references = {
-        [encodeRefKey(webLink)]: {
-          "@odata.type": "microsoft.graph.plannerExternalReference",
-          alias: "📧 פתח את המייל המקורי",
-          type: "Other",
-          previewPriority: " !",
-        },
+    if (info.webLink) {
+      refs[encodeRefKey(info.webLink)] = {
+        "@odata.type": "microsoft.graph.plannerExternalReference",
+        alias: "📧 פתח את המייל המקורי",
+        type: "Other",
+        previewPriority: " !",
       };
     }
+    if (Object.keys(refs).length) details.references = refs;
     await graph(`/planner/tasks/${task.id}/details`, {
       method: "PATCH",
       body: details,
       headers: { "If-Match": etag, Prefer: "return=minimal" },
     });
 
+    if ($("markMail").checked) {
+      try {
+        await markMail();
+        $("doneBefore").classList.remove("hidden");
+      } catch (e) {
+        warnings.push(friendly(e, "המייל לא סומן בקטגוריה"));
+      }
+    }
+
     state.lastBucket[plan.id] = bucketId || "";
     rsSet({ lastPlanId: plan.id, lastBucket: state.lastBucket });
 
-    $("doneDetails").textContent = `${plan.title}${
-      $("bucketSelect").selectedOptions[0] && bucketId ? " · " + $("bucketSelect").selectedOptions[0].textContent : ""
-    }`;
+    $("doneDetails").textContent = plan.title + (bucketId && bucketName ? " · " + bucketName : "");
+    $("doneWarn").textContent = warnings.join(" ");
+    $("doneWarn").classList.toggle("hidden", !warnings.length);
     $("openTaskLink").href = `https://tasks.office.com/${state.tenantId}/Home/Task/${task.id}`;
     show("done");
-    $("noteInput").value = "";
   } catch (e) {
     showError(e);
   } finally {
     btn.disabled = false;
-    btn.textContent = "צור משימה";
+    setBtn("צור משימה");
   }
 }
 
@@ -564,6 +863,7 @@ async function loadEverything() {
   setStatus("קורא את המייל…");
   state.mail = await loadMail();
   fillMailFields();
+  state.mailInfoPromise = loadMailInfo();
 
   const cached = readPlanCache();
   if (cached && cached.length) {
@@ -616,6 +916,16 @@ Office.onReady(async () => {
     else renderFavorites();
   });
   $("assigneeSelect").addEventListener("change", updateAssigneeWarning);
+  $("bucketSelect").addEventListener("change", onBucketChange);
+  $("addLabelBtn").addEventListener("click", addLabel);
+  $("newLabelInput").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      addLabel();
+    }
+  });
+  $("startInput").addEventListener("change", checkDates);
+  $("dueInput").addEventListener("change", checkDates);
   $("peopleSearch").addEventListener("input", onPeopleInput);
   $("includeBody").addEventListener("change", () =>
     $("bodyInput").classList.toggle("hidden", !$("includeBody").checked)
@@ -639,7 +949,7 @@ Office.onReady(async () => {
       if (!Office.context.mailbox.item) return;
       state.mail = await loadMail();
       fillMailFields();
-      $("noteInput").value = "";
+      state.mailInfoPromise = loadMailInfo();
       show("taskForm");
     });
   } catch {}
