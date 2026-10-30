@@ -446,11 +446,22 @@ async function addLabel() {
 }
 
 /* ---------------- People search (whole organization) ---------------- */
-function updateAssigneeWarning() {
+function notMemberMsg(plan) {
+  const sel = $("assigneeSelect").selectedOptions[0];
+  const name = sel ? sel.textContent : "המשתמש";
+  return `${name} לא משויך לתוכנית "${plan.title}". יש להוסיף אותו כחבר בקבוצה של התוכנית ואז לנסות שוב, או לבחור משתמש אחר.`;
+}
+
+function assigneeNotMember() {
   const id = $("assigneeSelect").value;
   const plan = currentPlan();
-  const show = !!(id && plan && plan.groupId && state.members.size && !state.members.has(id) && id !== state.me.id);
-  $("assigneeWarn").classList.toggle("hidden", !show);
+  return !!(id && plan && plan.groupId && state.members.size && !state.members.has(id) && id !== state.me.id);
+}
+
+function updateAssigneeWarning() {
+  const bad = assigneeNotMember();
+  if (bad) $("assigneeWarn").textContent = notMemberMsg(currentPlan());
+  $("assigneeWarn").classList.toggle("hidden", !bad);
 }
 
 let peopleTimer = null;
@@ -742,6 +753,11 @@ async function createTask(ev) {
     $("dueInput").focus();
     return;
   }
+  if (assigneeNotMember()) {
+    updateAssigneeWarning();
+    $("assigneeSelect").focus();
+    return;
+  }
   const bSel = $("bucketSelect");
   let bucketId = bSel.value || undefined;
   const newBucketName = $("newBucketInput").value.trim();
@@ -791,7 +807,15 @@ async function createTask(ev) {
     if (state.selectedLabels.size) {
       payload.appliedCategories = Object.fromEntries([...state.selectedLabels].map((k) => [k, true]));
     }
-    const task = await graph("/planner/tasks", { method: "POST", body: payload });
+    let task;
+    try {
+      task = await graph("/planner/tasks", { method: "POST", body: payload });
+    } catch (e) {
+      if (assignee && assignee !== state.me.id && /Graph (400|403)/.test(e.message || "")) {
+        throw new Error(notMemberMsg(plan));
+      }
+      throw e;
+    }
 
     let refs = {};
     const info = state.mailInfo || { files: [] };
