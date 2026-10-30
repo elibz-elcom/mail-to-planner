@@ -958,6 +958,15 @@ Office.onReady(async () => {
   $("taskForm").addEventListener("submit", createTask);
   $("retryBtn").addEventListener("click", start);
   $("againBtn").addEventListener("click", () => show("taskForm"));
+  const canClose = !!(Office.context.ui && Office.context.ui.closeContainer);
+  $("closeBtn").classList.toggle("hidden", !canClose);
+  $("closeBtn").addEventListener("click", () => {
+    try {
+      Office.context.ui.closeContainer();
+    } catch {
+      $("closeBtn").classList.add("hidden");
+    }
+  });
   $("signinBtn").addEventListener("click", async () => {
     try {
       await getToken(true);
