@@ -10,16 +10,11 @@ import {
 /* global Office, __CONFIG__ */
 const CONFIG = __CONFIG__;
 const GRAPH = "https://graph.microsoft.com/v1.0";
-const SCOPES = ["User.Read", "User.ReadBasic.All", "Tasks.ReadWrite", "GroupMember.Read.All", "Mail.Read"];
-const MAIL_WRITE_SCOPES = [...SCOPES, "Mail.ReadWrite", "MailboxSettings.ReadWrite"];
-const FILE_SCOPES = [...SCOPES, "Files.ReadWrite.All"];
+const SCOPES = ["User.Read", "User.ReadBasic.All", "Tasks.ReadWrite", "GroupMember.Read.All", "Mail.ReadWrite"];
 const MAX_DESC = 25000;
 const PLAN_CACHE_KEY = "m2p.plans.v2";
 const MAIL_CATEGORY = "משימה ב-Planner";
 const NEW_BUCKET = "__new__";
-const ATTACH_FOLDER = "Planner Attachments";
-const SIMPLE_UPLOAD_MAX = 4 * 1024 * 1024;
-const UPLOAD_CHUNK = 327680 * 16;
 const LABEL_COLORS = [
   "", "#e8478b", "#d13438", "#f2c80f", "#13a10e", "#0f6cbd", "#8764b8", "#a87b45", "#8cbd18",
   "#00b7c3", "#69797e", "#a0aeb2", "#8e562e", "#c50f1f", "#f7630c", "#ff8c00", "#eaa300",
@@ -39,7 +34,7 @@ const state = {
   members: new Set(), // user ids of the current plan's group
   catDesc: {},        // plan label names: category1..25 -> name
   selectedLabels: new Set(),
-  mailInfo: null,     // {webLink, categories, files}
+  mailInfo: null,     // {webLink, categories}
   mailInfoPromise: null,
 };
 
@@ -128,17 +123,17 @@ function remember(r) {
 
 /* ---------------- Graph ---------------- */
 async function graph(path, opts = {}, attempt = 0) {
-  const { method = "GET", body, headers = {}, raw = false, scopes = SCOPES, binary = false } = opts;
+  const { method = "GET", body, headers = {}, raw = false, scopes = SCOPES } = opts;
   const token = await getToken(false, scopes);
   const url = path.startsWith("http") ? path : GRAPH + path;
   const res = await fetch(url, {
     method,
     headers: {
       Authorization: "Bearer " + token,
-      ...(body ? { "Content-Type": binary ? "application/octet-stream" : "application/json" } : {}),
+      ...(body ? { "Content-Type": "application/json" } : {}),
       ...headers,
     },
-    body: body ? (binary ? body : JSON.stringify(body)) : undefined,
+    body: body ? JSON.stringify(body) : undefined,
   });
   if ((res.status === 429 || res.status === 503) && attempt < 3) {
     const wait = Number(res.headers.get("Retry-After") || 2) * 1000;
@@ -532,6 +527,10 @@ function loadMail() {
     received: item.dateTimeCreated ? new Date(item.dateTimeCreated) : null,
     body: "",
     restId: null,
+    attachments: (item.attachments || [])
+      .filter((a) => !a.isInline && a.attachmentType !== "cloud")
+      .map((a) => a.name)
+      .filter(Boolean),
   };
   try {
     const host = Office.context.mailbox.diagnostics.hostName || "";
@@ -556,136 +555,38 @@ async function loadMailInfo() {
   const seq = ++mailSeq;
   state.mailInfo = null;
   $("doneBefore").classList.add("hidden");
-  $("attCount").textContent = "";
-  $("includeAttachments").disabled = false;
-  const empty = { webLink: null, categories: [], files: [] };
+  const empty = { webLink: null, categories: [] };
   if (!state.mail || !state.mail.restId) {
     state.mailInfo = empty;
     return;
   }
   const id = encodeURIComponent(state.mail.restId);
   try {
-    const [m, atts] = await Promise.all([
-      graph(`/me/messages/${id}?$select=webLink,categories`),
-      graphAll(`/me/messages/${id}/attachments?$select=id,name,size,isInline,contentType`).catch(() => []),
-    ]);
+    const m = await graph(`/me/messages/${id}?$select=webLink,categories`);
     if (seq !== mailSeq) return;
-    const files = atts.filter(
-      (a) => a["@odata.type"] === "#microsoft.graph.fileAttachment" && !a.isInline
-    );
-    state.mailInfo = { webLink: m.webLink || null, categories: m.categories || [], files };
+    state.mailInfo = { webLink: m.webLink || null, categories: m.categories || [] };
   } catch {
     if (seq !== mailSeq) return;
     state.mailInfo = empty;
   }
   const info = state.mailInfo;
   $("doneBefore").classList.toggle("hidden", !info.categories.includes(MAIL_CATEGORY));
-  $("attCount").textContent = info.files.length ? `(${info.files.length})` : "(אין במייל)";
-  $("includeAttachments").disabled = !info.files.length;
 }
 
-function safeName(s, max = 80) {
-  const clean = (s || "").replace(/[\\/:*?"<>|#%\u0000-\u001f]/g, " ").replace(/\s+/g, " ").trim();
-  return (clean || "mail").slice(0, max).replace(/[. ]+$/, "");
-}
-
-function refType(name) {
-  const ext = (name.split(".").pop() || "").toLowerCase();
-  if (["doc", "docx", "docm", "rtf", "odt"].includes(ext)) return "Word";
-  if (["xls", "xlsx", "xlsm", "csv", "ods"].includes(ext)) return "Excel";
-  if (["ppt", "pptx", "pptm", "odp"].includes(ext)) return "PowerPoint";
-  if (ext === "pdf") return "Pdf";
-  return "Other";
-}
-
-function encPath(p) {
-  return p.split("/").map(encodeURIComponent).join("/");
-}
-
-async function uploadToGroup(groupId, path, blob) {
-  const base = `/groups/${groupId}/drive/root:/${encPath(path)}:`;
-  if (blob.size <= SIMPLE_UPLOAD_MAX) {
-    return graph(`${base}/content?@microsoft.graph.conflictBehavior=rename`, {
-      method: "PUT", body: blob, binary: true, scopes: FILE_SCOPES,
-    });
-  }
-  const session = await graph(`${base}/createUploadSession`, {
-    method: "POST",
-    body: { item: { "@microsoft.graph.conflictBehavior": "rename" } },
-    scopes: FILE_SCOPES,
-  });
-  let start = 0;
-  let last = null;
-  while (start < blob.size) {
-    const end = Math.min(start + UPLOAD_CHUNK, blob.size);
-    last = await fetch(session.uploadUrl, {
-      method: "PUT",
-      headers: { "Content-Range": `bytes ${start}-${end - 1}/${blob.size}` },
-      body: blob.slice(start, end),
-    });
-    if (!last.ok) throw new Error(`upload ${last.status}`);
-    start = end;
-  }
-  return last.json();
-}
-
-async function uploadAttachments(plan, onProgress) {
-  const files = (state.mailInfo && state.mailInfo.files) || [];
-  if (!files.length) return { refs: {}, failed: 0 };
-  if (!plan.groupId) throw new Error("לתוכנית הזו אין ספריית קבצים של קבוצה");
-  const id = encodeURIComponent(state.mail.restId);
-  const stamp = new Date().toISOString().slice(0, 10);
-  const folder = `${ATTACH_FOLDER}/${safeName(plan.title, 60)}/${stamp} ${safeName(state.mail.subject, 60)}`;
-  const refs = {};
-  let failed = 0;
-  let lastErr = null;
-  for (let i = 0; i < files.length; i++) {
-    const f = files[i];
-    onProgress(i + 1, files.length);
-    try {
-      const res = await graph(`/me/messages/${id}/attachments/${encodeURIComponent(f.id)}/$value`, { raw: true });
-      if (!res.ok) throw new Error(`Graph ${res.status}`);
-      const blob = await res.blob();
-      const item = await uploadToGroup(plan.groupId, `${folder}/${safeName(f.name, 120)}`, blob);
-      refs[encodeRefKey(item.webUrl)] = {
-        "@odata.type": "microsoft.graph.plannerExternalReference",
-        alias: f.name,
-        type: refType(f.name),
-      };
-    } catch (e) {
-      console.error(e);
-      lastErr = e;
-      failed++;
-    }
-  }
-  if (failed === files.length && lastErr) throw lastErr;
-  return { refs, failed };
-}
-
+// The green "משימה ב-Planner" category is created once per mailbox (manually or by macro),
+// so the add-in only needs Mail.ReadWrite to tag the message.
 async function markMail() {
   const id = encodeURIComponent(state.mail.restId);
-  try {
-    const found = await graph("/me/outlook/masterCategories", { scopes: MAIL_WRITE_SCOPES });
-    if (!(found.value || []).some((c) => c.displayName === MAIL_CATEGORY)) {
-      await graph("/me/outlook/masterCategories", {
-        method: "POST",
-        body: { displayName: MAIL_CATEGORY, color: "preset4" },
-        scopes: MAIL_WRITE_SCOPES,
-      });
-    }
-  } catch (e) {
-    console.warn(e); // the category still applies, just without the green color
-  }
   const current = (state.mailInfo && state.mailInfo.categories) || [];
   const cats = Array.from(new Set([...current, MAIL_CATEGORY]));
-  await graph(`/me/messages/${id}`, { method: "PATCH", body: { categories: cats }, scopes: MAIL_WRITE_SCOPES });
+  await graph(`/me/messages/${id}`, { method: "PATCH", body: { categories: cats } });
   if (state.mailInfo) state.mailInfo.categories = cats;
 }
 
 function friendly(e, prefix) {
   const m = String((e && e.message) || e);
   if (/40[13]|consent|AADSTS65001|interaction_required|insufficient|Access ?Denied/i.test(m)) {
-    return `${prefix}: חסרה הרשאה. צריך לתת Admin consent להרשאות החדשות ב-Entra.`;
+    return `${prefix}: חסרה הרשאה (Admin consent ב-Entra).`;
   }
   return `${prefix}: ${m}`;
 }
@@ -705,6 +606,9 @@ function buildDescription(mail, body) {
     );
   }
   lines.push(`נושא: ${mail.subject}`);
+  if (mail.attachments && mail.attachments.length) {
+    lines.push(`קבצים מצורפים (במייל המקורי): ${mail.attachments.join(", ")}`);
+  }
   if (body) {
     lines.push("", "────────────", "");
     body = body.replace(/\r\n/g, "\n").replace(/\n{3,}/g, "\n\n");
@@ -817,17 +721,8 @@ async function createTask(ev) {
       throw e;
     }
 
-    let refs = {};
-    const info = state.mailInfo || { files: [] };
-    if ($("includeAttachments").checked && info.files.length) {
-      try {
-        const r = await uploadAttachments(plan, (i, n) => setBtn(`מעלה קבצים (${i}/${n})…`));
-        refs = r.refs;
-        if (r.failed) warnings.push(`${r.failed} מתוך ${info.files.length} הקבצים לא צורפו.`);
-      } catch (e) {
-        warnings.push(friendly(e, "הקבצים המצורפים לא צורפו"));
-      }
-    }
+    const refs = {};
+    const info = state.mailInfo || {};
 
     setBtn("משלים פרטים…");
     const etag = await getDetailsEtag(task.id);
