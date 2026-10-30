@@ -1,0 +1,51 @@
+name: Change alert
+
+# Opens an Issue on every push (any branch or tag) that mentions the owner,
+# so GitHub sends an email for each code change. The Issue is closed right
+# away and stays as a searchable change log under Issues -> Closed.
+on:
+  push:
+    branches: ["**"]
+    tags: ["**"]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  alert:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          script: |
+            const p = context.payload;
+            const ref = context.ref.replace(/^refs\/(heads|tags)\//, "");
+            const who = p.sender ? p.sender.login : "unknown";
+            const commits = (p.commits || []).map((c) => {
+              const first = (c.message || "").split("\n")[0];
+              const author = c.author ? `${c.author.name} <${c.author.email}>` : "";
+              return `- [\`${c.id.slice(0, 7)}\`](${c.url}) ${first} — ${author}`;
+            });
+            const files = [...new Set((p.commits || []).flatMap((c) => [...c.added, ...c.modified, ...c.removed]))];
+            const body = [
+              "@elibz-elcom — the code in this repository was changed.",
+              "",
+              `**Pushed by:** ${who}${p.pusher && p.pusher.name ? ` (${p.pusher.name})` : ""}`,
+              `**Branch/tag:** ${ref}`,
+              `**When:** ${(p.head_commit && p.head_commit.timestamp) || new Date().toISOString()}`,
+              `**Compare:** ${p.compare || "-"}`,
+              p.forced ? "**⚠ Force push (history was rewritten)**" : "",
+              p.deleted ? "**⚠ Branch/tag was deleted**" : "",
+              "",
+              "**Commits:**",
+              commits.length ? commits.join("\n") : "_(none)_",
+              "",
+              `**Files:** ${files.length ? files.map((f) => "`" + f + "`").join(", ") : "-"}`,
+              "",
+              "If you didn't make this change: change your GitHub password, review Settings → Security log, and revert the commit.",
+            ].filter((l, i, a) => l !== "" || a[i - 1] !== "").join("\n");
+            const title = `Code change on ${ref} by ${who} (${(p.after || "").slice(0, 7)})`;
+            const { owner, repo } = context.repo;
+            const { data: issue } = await github.rest.issues.create({ owner, repo, title, body });
+            await github.rest.issues.update({ owner, repo, issue_number: issue.number, state: "closed", state_reason: "completed" });
