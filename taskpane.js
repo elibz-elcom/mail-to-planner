@@ -104,6 +104,9 @@ async function initAuth() {
 }
 
 async function getToken(interactive = false, scopes = SCOPES) {
+  // Token handed over by the Office sign-in dialog (non-NAA hosts such as Office 2021).
+  if (!state.naa && !interactive && state.dlg && state.dlg.expiresOn - 120000 > Date.now())
+    return state.dlg.accessToken;
   const account = state.account || state.pca.getAllAccounts()[0];
   if (!interactive) {
     try {
@@ -113,7 +116,47 @@ async function getToken(interactive = false, scopes = SCOPES) {
       if (!state.naa) throw Object.assign(new Error("interaction_required"), { needsSignIn: true });
     }
   }
-  return remember(await state.pca.acquireTokenPopup({ scopes }));
+  if (state.naa) return remember(await state.pca.acquireTokenPopup({ scopes }));
+  // Without NAA, MSAL popups are blocked in some Outlook builds (Office 2021), so sign in
+  // through an Office dialog instead.
+  const r = await dialogSignIn();
+  state.dlg = r;
+  state.tenantId = r.tenantId || state.tenantId;
+  return r.accessToken;
+}
+
+function dialogSignIn() {
+  return new Promise((resolve, reject) => {
+    if (!Office.context.ui || !Office.context.ui.displayDialogAsync)
+      return reject(new Error("גרסת Outlook זו לא תומכת בחלון התחברות"));
+    Office.context.ui.displayDialogAsync(
+      CONFIG.baseUrl + "/redirect.html?m2p=dialog",
+      { height: 65, width: 35 },
+      (res) => {
+        if (res.status !== Office.AsyncResultStatus.Succeeded)
+          return reject(new Error("לא ניתן לפתוח את חלון ההתחברות: " + (res.error && res.error.message)));
+        const dlg = res.value;
+        let settled = false;
+        dlg.addEventHandler(Office.EventType.DialogMessageReceived, (arg) => {
+          settled = true;
+          try { dlg.close(); } catch { /* already closed */ }
+          let m;
+          try { m = JSON.parse(arg.message); } catch { return reject(new Error("תשובה לא תקינה מחלון ההתחברות")); }
+          if (m.error || !m.accessToken) reject(new Error(m.error || "ההתחברות לא הושלמה"));
+          else resolve(m);
+        });
+        dlg.addEventHandler(Office.EventType.DialogEventReceived, (arg) => {
+          if (settled) return;
+          settled = true;
+          reject(
+            arg.error === 12006
+              ? Object.assign(new Error("חלון ההתחברות נסגר לפני סיום ההתחברות"), { needsSignIn: true })
+              : new Error("שגיאה בחלון ההתחברות (" + arg.error + ")")
+          );
+        });
+      }
+    );
+  });
 }
 function remember(r) {
   state.account = r.account;
@@ -867,7 +910,8 @@ Office.onReady(async () => {
       await getToken(true);
       await start();
     } catch (e) {
-      showError(e);
+      if (e && e.needsSignIn) show("signin");
+      else showError(e);
     }
   });
 
