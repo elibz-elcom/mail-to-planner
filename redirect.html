@@ -2,10 +2,44 @@
 <html lang="he" dir="rtl">
 <head>
   <meta charset="utf-8">
-  <title>מתחבר…</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>שלח ל-Planner</title>
+  <style>
+    :root { --bg: #ffffff; --fg: #1f2328; --muted: #6b7280; --line: #d6dae0; --ok: #15803d; --err: #b42318; }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg: #1b1d21; --fg: #e8eaed; --muted: #9aa0a6; --line: #3a3f46; --ok: #4ade80; --err: #f87171; }
+    }
+    html, body { margin: 0; background: var(--bg); color: var(--fg);
+      font-family: "Segoe UI", system-ui, -apple-system, Arial, sans-serif; }
+    main { max-width: 520px; margin: 48px auto; padding: 0 16px; text-align: center; }
+    .card { border: 1px solid var(--line); border-radius: 12px; padding: 28px 20px; }
+    .icon { font-size: 40px; line-height: 1; margin-bottom: 12px; }
+    h1 { font-size: 20px; margin: 0 0 8px; }
+    p { margin: 6px 0; color: var(--muted); font-size: 15px; }
+    .ok .icon, .ok h1 { color: var(--ok); }
+    .err .icon, .err h1 { color: var(--err); }
+    .hidden { display: none; }
+    .foot { margin-top: 20px; display: flex; justify-content: center; align-items: center; gap: 8px; }
+    .foot img { height: 32px; width: auto; }
+    .foot span { font-size: 14px; font-weight: 600; color: var(--fg); }
+  </style>
 </head>
 <body>
-  <p>מתחבר…</p>
+  <main>
+    <div id="card" class="card">
+      <div id="icon" class="icon" aria-hidden="true">⏳</div>
+      <h1 id="title">מתחבר…</h1>
+      <p id="msg"></p>
+      <p id="tenant" class="hidden"></p>
+    </div>
+    <footer class="foot" dir="ltr">
+      <picture>
+        <source srcset="elcom-logo-dark.png" media="(prefers-color-scheme: dark)">
+        <img src="elcom-logo.png" width="55" height="32" alt="">
+      </picture>
+      <span>Elcom IT</span>
+    </footer>
+  </main>
   <script src="redirect.js"></script>
 </body>
 </html>
